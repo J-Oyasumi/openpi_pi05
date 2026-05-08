@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.three_tasks_nosvo_policy as three_tasks_nosvo_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -352,6 +353,58 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotThreeTasksNoSvoDataConfig(DataConfigFactory):
+    """Data config for the user-collected xArm7 `three_tasks_nosvo` LeRobot dataset.
+
+    Source dataset features:
+        observation.state           : float32 (8,)   [joint_0..6, gripper]
+        action                      : float32 (8,)   [joint_0..6, gripper_desired]
+        observation.images.left     : video (3,H,W)  ZED LEFT camera
+
+    The repack transform renames these into the keys expected by ThreeTasksInputs.
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "observation.images.left",
+                        "observation/state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[three_tasks_nosvo_policy.ThreeTasksInputs(model_type=model_config.model_type)],
+            outputs=[three_tasks_nosvo_policy.ThreeTasksOutputs()],
+        )
+
+        # Actions in our dataset are absolute joint targets; convert the 7 joint dims to deltas
+        # w.r.t. the current state (gripper stays absolute). This mirrors LeRobotAloha's setup.
+        delta_action_mask = _transforms.make_bool_mask(7, -1)
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.DeltaActions(delta_action_mask)],
+            outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            # Our LeRobot dataset stores actions under the singular `action` key.
+            action_sequence_keys=("action",),
         )
 
 
@@ -963,6 +1016,60 @@ _CONFIGS = [
         num_train_steps=10,
         overwrite=True,
         exp_name="debug_pi05",
+        wandb_enabled=False,
+    ),
+    #
+    # Fine-tuning the user-collected `three_tasks_nosvo` xArm7 dataset.
+    #
+    # Real pi0.5 fine-tune config: loads the pi05_base checkpoint and trains on
+    # the converted LeRobot dataset (3 tasks, single camera, 8-D state/action).
+    TrainConfig(
+        name="pi05_three_tasks_nosvo",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotThreeTasksNoSvoDataConfig(
+            repo_id="hanjiang/three_tasks_nosvo",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+    ),
+    # Dry-run / debug config: fake (no checkpoint download) but exercises the full
+    # data pipeline + transforms + train step. Use this to verify end-to-end wiring
+    # before launching the heavy fine-tune above.
+    TrainConfig(
+        name="debug_pi05_three_tasks_nosvo",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+        ),
+        data=LeRobotThreeTasksNoSvoDataConfig(
+            repo_id="hanjiang/three_tasks_nosvo",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=2,
+        num_workers=0,
+        num_train_steps=4,
+        save_interval=2,
+        log_interval=1,
+        overwrite=True,
+        exp_name="debug_three_tasks_nosvo",
         wandb_enabled=False,
     ),
     # RoboArena & PolaRiS configs.

@@ -4,6 +4,11 @@ checkpoints/
 data/
 wandb/
 
+# Real-world dataset bundle (too large for GitHub, distribute out-of-band).
+3tasks_nosvo/
+three_tasks_nosvo_dataset.zip
+*.zip
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
