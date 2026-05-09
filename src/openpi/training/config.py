@@ -1072,6 +1072,56 @@ _CONFIGS = [
         exp_name="debug_three_tasks_nosvo",
         wandb_enabled=False,
     ),
+    #
+    # Fine-tuning the merged `realworld` xArm7 dataset (3tasks_nosvo + extra/extra_data).
+    # Schema is identical to three_tasks_nosvo so we reuse LeRobotThreeTasksNoSvoDataConfig.
+    #
+    TrainConfig(
+        name="pi05_realworld",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+        ),
+        data=LeRobotThreeTasksNoSvoDataConfig(
+            repo_id="hanjiang/realworld",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=32,
+        num_workers=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=5e-5,
+            decay_steps=30_000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="debug_pi05_realworld",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            paligemma_variant="dummy",
+            action_expert_variant="dummy",
+        ),
+        data=LeRobotThreeTasksNoSvoDataConfig(
+            repo_id="hanjiang/realworld",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        batch_size=2,
+        num_workers=0,
+        num_train_steps=4,
+        save_interval=2,
+        log_interval=1,
+        overwrite=True,
+        exp_name="debug_realworld",
+        wandb_enabled=False,
+    ),
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
